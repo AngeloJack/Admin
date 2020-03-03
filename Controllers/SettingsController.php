@@ -15,14 +15,19 @@ namespace Modules\Admin\Controllers;
 use Phact\Application\ModulesInterface;
 use Phact\Components\BreadcrumbsInterface;
 use Phact\Components\FlashInterface;
+use Phact\Exceptions\UnknownPropertyException;
 use Phact\Form\ModelForm;
 use Phact\Interfaces\AuthInterface;
 use Phact\Main\Phact;
 use Phact\Module\Module;
 use Phact\Orm\Model;
+use Phact\Orm\TableManager;
 use Phact\Request\HttpRequestInterface;
 use Phact\Template\RendererInterface;
 use Phact\Translate\Translate;
+use RecursiveDirectoryIterator;
+use RecursiveIteratorIterator;
+use ReflectionClass;
 
 class SettingsController extends BackendController
 {
@@ -37,6 +42,8 @@ class SettingsController extends BackendController
 
     /** @var Translate */
     protected $_translate;
+
+    public $modelsFolder = 'Models';
 
     public function __construct(
         HttpRequestInterface $request,
@@ -58,24 +65,67 @@ class SettingsController extends BackendController
 
     public function index($module)
     {
-        /** @var Module $module */
-        $module = $this->_modules->getModule($module);
-        /** @var Model $settingsModel */
-        $settingsModel = $module->getSettingsModel();
-        if (!$settingsModel) {
-            $this->error(404);
+        $singleModel = false;
+        try {
+            /** @var Module $module */
+            $module = $this->_modules->getModule($module);
+            /** @var Model $settingsModel */
+            $settingsModel = $module->getSettingsModel();
+            if (!$settingsModel) {
+                $this->error(404);
+            }
+            $model = $settingsModel->objects()->get();
+            if (!$model) {
+                $model = $settingsModel;
+            }
+        } catch (UnknownPropertyException $e) {
+            $classes = [];
+            foreach ($this->_modules->getModules() as $moduleName) {
+                $path = implode(DIRECTORY_SEPARATOR, [$moduleName->getPath(), $this->modelsFolder]);
+                if (is_dir($path)) {
+                    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($path)) as $filename)
+                    {
+                        if ($filename->isDir()) continue;
+                        $name = $filename->getBasename('.php');
+                        $classes[] = implode('\\', [$moduleName::classNamespace(), $this->modelsFolder, $name]);
+                    }
+                }
+            }
+            $models = [];
+            foreach ($classes as $class) {
+                if (class_exists($class) && is_a($class, Model::class, true)) {
+                    $reflection = new ReflectionClass($class);
+                    if (!$reflection->isAbstract()) {
+                        $models[] = new $class();
+                    }
+                }
+            }
+            foreach ($models as $modelClass) {
+                $class = $modelClass::className();
+                $classParts = explode('\\', $class);
+                $name = array_pop($classParts);
+                if ($name == $module) {
+                    $singleModel = true;
+                    $model = $modelClass->objects()->get();
+                    $module = $modelClass;
+                }
+            }
         }
-        $model = $settingsModel->objects()->get();
-        if (!$model) {
-            $model = $settingsModel;
+
+        if (!$module) {
+            throw new UnknownPropertyException("Module with name" . $name . " not found");
         }
+
         /** @var ModelForm $settingsForm */
-        $settingsForm = $module->getSettingsForm();
+        $settingsForm = !$singleModel ? $module->getSettingsForm() : $module->getSingleAdminModelForm();
         $settingsForm->setModel($model);
         $settingsForm->setInstance($model);
 
         if ($this->_breadcrumbs && $this->_translate) {
-            $message = $this->_translate->t('Admin.main', 'Settings of module');
+            $message = '';
+            if (!$singleModel) {
+                $message = $this->_translate->t('Admin.main', 'Settings of module');
+            }
             $this->_breadcrumbs->add($message . ' "' . $module->getVerboseName() . '"');
         }
 
@@ -91,7 +141,8 @@ class SettingsController extends BackendController
         echo $this->render('admin/settings.tpl', [
             'form' => $settingsForm,
             'model' => $model,
-            'settingsModule' => $module
+            'settingsModule' => $module,
+            'singleModel' => $singleModel
         ]);
     }
 }

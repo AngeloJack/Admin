@@ -1,7 +1,7 @@
 {extends $.request->getIsAjax() ? "admin/ajax.tpl" : "admin/base.tpl"}
 
 {block 'heading'}
-    <h1>{t "Admin.main" "Settings of module"} "{$settingsModule->getVerboseName()}"</h1>
+    <h1>{if !$singleModel}{t "Admin.main" "Settings of module"}{/if}"{$settingsModule->getVerboseName()}"</h1>
 {/block}
 
 {block 'main_block'}
